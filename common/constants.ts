@@ -1,8 +1,8 @@
-import { Buffer } from "https://deno.land/std@0.147.0/node/buffer.ts";
-import { Duplex } from "https://deno.land/std@0.147.0/node/stream.ts";
-import { Socket } from "https://deno.land/std@0.147.0/node/net.ts";
+// @deno-types="npm:@types/node"
+import { Buffer } from "node:buffer";
+import { Duplex } from "node:stream";
+import { Socket } from "node:net";
 import { SocketConnectOpts } from "./types.ts";
-import { RequireOnlyOne } from "./util.ts";
 
 export const DEFAULT_TIMEOUT = 30000;
 export const SOCKS5_CUSTOM_AUTH_START = 0x80;
@@ -53,21 +53,29 @@ export const ERRORS = {
 export type SocksProxyType = 4 | 5;
 export type SocksCommandOption = "connect" | "bind" | "associate";
 export type SocksClientBoundEvent = SocksClientEstablishedEvent;
-export type SocksProxy = RequireOnlyOne<
-  {
-    ipaddress?: string;
-    host?: string;
-    port: number;
-    type: SocksProxyType;
-    userId?: string;
-    password?: string;
-    custom_auth_method?: number;
-    custom_auth_request_handler?: () => Promise<Buffer>;
-    custom_auth_response_size?: number;
-    custom_auth_response_handler?: (data?: Buffer) => Promise<boolean>;
-  },
-  "host" | "ipaddress"
->;
+export interface SocksProxy {
+  // The ip address (or hostname) of the proxy. (this is equivalent to the host option)
+  ipaddress?: string;
+  // The ip address (or hostname) of the proxy. (this is equivalent to the ipaddress option)
+  host?: string;
+  // Numeric port number of the proxy.
+  port: number;
+  // 4 or 5 (4 is also used for 4a).
+  type: SocksProxyType;
+  /* For SOCKS v4, the userId can be used for authentication.
+     For SOCKS v5, userId is used as the username for username/password authentication. */
+  userId?: string;
+  // For SOCKS v5, this password is used in username/password authentication.
+  password?: string;
+  // If present, this auth method will be sent to the proxy server during the initial handshake.
+  custom_auth_method?: number;
+  // If present with custom_auth_method, the payload of the returned Buffer of the provided function is sent during the auth handshake.
+  custom_auth_request_handler?: () => Promise<Buffer>;
+  // If present with custom_auth_method, this is the expected total response size of the data returned from the server during custom auth handshake.
+  custom_auth_response_size?: number;
+  // If present with custom_auth_method, the response from the server is passed to this function. If true is returned from this function, socks client will continue the handshake process, if false it will disconnect.
+  custom_auth_response_handler?: (data: Buffer) => Promise<boolean>;
+}
 
 export enum SocksCommand {
   connect = 0x01,

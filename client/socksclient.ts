@@ -1,23 +1,10 @@
-// deno-lint-ignore-file no-explicit-any ban-types no-async-promise-executor
-import { EventEmitter } from "https://deno.land/std@0.147.0/node/events.ts";
-import {
-  isIPv4,
-  isIPv6,
-  Socket,
-} from "https://deno.land/std@0.147.0/node/net.ts";
-import {
-  fromLong,
-  toBuffer,
-  toLong,
-  toString,
-} from "https://deno.land/x/dip@v2.0.0/mod.ts";
-import { SmartBuffer } from "https://deno.land/x/smart_buffer@v3.0.0/mod.ts";
-import { Duplex } from "https://deno.land/std@0.147.0/node/stream.ts";
-import { Buffer } from "https://deno.land/std@0.147.0/node/buffer.ts";
-import {
-  setImmediate,
-  setTimeout,
-} from "https://deno.land/std@0.147.0/node/timers.ts";
+// deno-lint-ignore-file no-explicit-any no-async-promise-executor
+import { EventEmitter } from "node:events";
+import { isIPv4, isIPv6, Socket } from "node:net";
+import { SmartBuffer } from "https://deno.land/x/smart_buffer@v4.2.0-1/mod.ts";
+import { Duplex } from "node:stream";
+import { Buffer } from "node:buffer";
+import { setImmediate, setTimeout } from "node:timers";
 import {
   DEFAULT_TIMEOUT,
   ERRORS,
@@ -40,9 +27,13 @@ import { SocketConnectOpts } from "../common/types.ts";
 import { ReceiveBuffer } from "../common/receive_buffer.ts";
 import { shuffleArray, SocksClientError } from "../common/util.ts";
 import {
+  int32ToIpv4,
+  ipToBuffer,
+  ipv4ToInt32,
   validateSocksClientChainOptions,
   validateSocksClientOptions,
 } from "../common/helpers.ts";
+import { Address6 } from "npm:ip-address@9.0.5";
 
 export declare interface SocksClient {
   on(event: "error", listener: (err: SocksClientError) => void): this;
@@ -52,7 +43,7 @@ export declare interface SocksClient {
     listener: (info: SocksClientEstablishedEvent) => void,
   ): this;
 
-  once(event: string, listener: (...args: any[]) => void): this;
+  once(event: string, listener: (...args: unknown[]) => void): this;
   once(event: "error", listener: (err: SocksClientError) => void): this;
   once(event: "bound", listener: (info: SocksClientBoundEvent) => void): this;
   once(
@@ -60,7 +51,7 @@ export declare interface SocksClient {
     listener: (info: SocksClientEstablishedEvent) => void,
   ): this;
 
-  emit(event: string | symbol, ...args: any[]): boolean;
+  emit(event: string | symbol, ...args: unknown[]): boolean;
   emit(event: "error", err: SocksClientError): boolean;
   emit(event: "bound", info: SocksClientBoundEvent): boolean;
   emit(event: "established", info: SocksClientEstablishedEvent): boolean;
@@ -92,7 +83,10 @@ export class SocksClient extends EventEmitter implements SocksClient {
 
   static createConnection(
     options: SocksClientOptions,
-    callback?: Function,
+    callback?: (
+      error: Error | null,
+      info?: SocksClientEstablishedEvent,
+    ) => void,
   ): Promise<SocksClientEstablishedEvent> {
     return new Promise<SocksClientEstablishedEvent>((resolve, reject) => {
       // Validate SocksClientOptions
@@ -134,7 +128,10 @@ export class SocksClient extends EventEmitter implements SocksClient {
 
   static createConnectionChain(
     options: SocksClientChainOptions,
-    callback?: Function,
+    callback?: (
+      error: Error | null,
+      socket?: SocksClientEstablishedEvent,
+    ) => void,
   ): Promise<SocksClientEstablishedEvent> {
     return new Promise<SocksClientEstablishedEvent>(async (resolve, reject) => {
       // Validate SocksClientChainOptions
@@ -149,14 +146,13 @@ export class SocksClient extends EventEmitter implements SocksClient {
         }
       }
 
-      let sock!: Socket;
-
       // Shuffle proxies
       if (options.randomizeChain) {
         shuffleArray(options.proxies);
       }
 
       try {
+        let sock!: Socket;
         // tslint:disable-next-line:no-increment-decrement
         for (let i = 0; i < options.proxies.length; i++) {
           const nextProxy = options.proxies[i];
@@ -175,13 +171,11 @@ export class SocksClient extends EventEmitter implements SocksClient {
             command: "connect",
             proxy: nextProxy,
             destination: nextDestination,
-            // Initial connection ignores this as sock is undefined. Subsequent connections re-use the first proxy socket to form a chain.
+            existing_socket: sock,
           });
 
           // If sock is undefined, assign it here.
-          if (!sock) {
-            sock = result.socket;
-          }
+          sock = sock || result.socket;
         }
 
         if (typeof callback === "function") {
@@ -207,10 +201,10 @@ export class SocksClient extends EventEmitter implements SocksClient {
     buff.writeUInt8(options.frameNumber || 0);
     if (isIPv4(options.remoteHost.host)) {
       buff.writeUInt8(Socks5HostType.IPv4);
-      buff.writeUInt32BE(toLong(options.remoteHost.host));
+      buff.writeUInt32BE(ipv4ToInt32(options.remoteHost.host));
     } else if (isIPv6(options.remoteHost.host)) {
       buff.writeUInt8(Socks5HostType.IPv6);
-      buff.writeBuffer(toBuffer(options.remoteHost.host));
+      buff.writeBuffer(ipToBuffer(options.remoteHost.host));
     } else {
       buff.writeUInt8(Socks5HostType.Hostname);
       buff.writeUInt8(Buffer.byteLength(options.remoteHost.host));
@@ -228,9 +222,11 @@ export class SocksClient extends EventEmitter implements SocksClient {
     const hostType: Socks5HostType = buff.readUInt8();
     let remoteHost;
     if (hostType === Socks5HostType.IPv4) {
-      remoteHost = fromLong(buff.readUInt32BE());
+      remoteHost = int32ToIpv4(buff.readUInt32BE());
     } else if (hostType === Socks5HostType.IPv6) {
-      remoteHost = toString(buff.readBuffer(16));
+      remoteHost = Address6.fromByteArray(
+        Array.from(buff.readBuffer(16)),
+      ).canonicalForm();
     } else {
       remoteHost = buff.readString(buff.readUInt8());
     }
@@ -423,7 +419,7 @@ export class SocksClient extends EventEmitter implements SocksClient {
 
     // Socks 4 (IPv4)
     if (isIPv4(this.options.destination.host)) {
-      buff.writeBuffer(toBuffer(this.options.destination.host));
+      buff.writeBuffer(ipToBuffer(this.options.destination.host));
       buff.writeStringNT(userId);
       // Socks 4a (hostname)
     } else {
@@ -457,7 +453,7 @@ export class SocksClient extends EventEmitter implements SocksClient {
 
         const remoteHost: SocksRemoteHost = {
           port: buff.readUInt16BE(),
-          host: fromLong(buff.readUInt32BE()),
+          host: int32ToIpv4(buff.readUInt32BE()),
         };
 
         // If host is 0.0.0.0, set to proxy host.
@@ -491,7 +487,7 @@ export class SocksClient extends EventEmitter implements SocksClient {
 
       const remoteHost: SocksRemoteHost = {
         port: buff.readUInt16BE(),
-        host: fromLong(buff.readUInt32BE()),
+        host: int32ToIpv4(buff.readUInt32BE()),
       };
 
       this.setState(SocksClientState.Established);
@@ -574,10 +570,9 @@ export class SocksClient extends EventEmitter implements SocksClient {
   }
 
   private async sendSocks5CustomAuthentication() {
-    this.nextRequiredPacketBufferSize = this.options.proxy
-      .custom_auth_response_size!;
     if (this.options.proxy.custom_auth_response_handler) {
       this.socket.write(
+        // @ts-ignore idk
         await this.options.proxy.custom_auth_response_handler(),
       );
     }
@@ -611,7 +606,7 @@ export class SocksClient extends EventEmitter implements SocksClient {
         this.receiveBuffer.get(2),
       );
     } else if (this.socks5ChosenAuthType === Socks5Auth.UserPass) {
-      authResult = this
+      authResult = await this
         .handleSocks5AuthenticationUserPassHandshakeResponse(
           this.receiveBuffer.get(2),
         );
@@ -640,10 +635,10 @@ export class SocksClient extends EventEmitter implements SocksClient {
     // ipv4, ipv6, domain?
     if (isIPv4(this.options.destination.host)) {
       buff.writeUInt8(Socks5HostType.IPv4);
-      buff.writeBuffer(toBuffer(this.options.destination.host));
+      buff.writeBuffer(ipToBuffer(this.options.destination.host));
     } else if (isIPv6(this.options.destination.host)) {
       buff.writeUInt8(Socks5HostType.IPv6);
-      buff.writeBuffer(toBuffer(this.options.destination.host));
+      buff.writeBuffer(ipToBuffer(this.options.destination.host));
     } else {
       buff.writeUInt8(Socks5HostType.Hostname);
       buff.writeUInt8(this.options.destination.host.length);
@@ -688,7 +683,7 @@ export class SocksClient extends EventEmitter implements SocksClient {
         );
 
         remoteHost = {
-          host: fromLong(buff.readUInt32BE()),
+          host: int32ToIpv4(buff.readUInt32BE()),
           port: buff.readUInt16BE(),
         };
 
@@ -732,7 +727,9 @@ export class SocksClient extends EventEmitter implements SocksClient {
         );
 
         remoteHost = {
-          host: toString(buff.readBuffer(16)),
+          host: Address6.fromByteArray(
+            Array.from(buff.readBuffer(16)),
+          ).canonicalForm(),
           port: buff.readUInt16BE(),
         };
       }
@@ -800,7 +797,7 @@ export class SocksClient extends EventEmitter implements SocksClient {
         );
 
         remoteHost = {
-          host: fromLong(buff.readUInt32BE()),
+          host: int32ToIpv4(buff.readUInt32BE()),
           port: buff.readUInt16BE(),
         };
 
@@ -844,7 +841,9 @@ export class SocksClient extends EventEmitter implements SocksClient {
         );
 
         remoteHost = {
-          host: toString(buff.readBuffer(16)),
+          host: Address6.fromByteArray(
+            Array.from(buff.readBuffer(16)),
+          ).canonicalForm(),
           port: buff.readUInt16BE(),
         };
       }

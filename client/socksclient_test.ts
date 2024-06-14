@@ -3,13 +3,16 @@ import { SocksClient } from "./socksclient.ts";
 import { SocksProxy, SocksRemoteHost } from "../common/constants.ts";
 import { shuffleArray, SocksClientError } from "../common/util.ts";
 import {
+  int32ToIpv4,
+  ipToBuffer,
+  ipv4ToInt32,
   validateSocksClientChainOptions,
   validateSocksClientOptions,
 } from "../common/helpers.ts";
-import { Socket } from "https://deno.land/std@0.147.0/node/net.ts";
-import { Buffer } from "https://deno.land/std@0.147.0/node/buffer.ts";
-import assert from "https://deno.land/std@0.147.0/node/assert.ts";
-import { assert as assert_ } from "https://deno.land/std@0.147.0/testing/asserts.ts";
+import { Socket } from "node:net";
+import { Buffer } from "node:buffer";
+import assert from "node:assert";
+import { Address4, Address6 } from "npm:ip-address@9.0.5";
 
 Deno.test("Creating and parsing Socks UDP frames", async (t) => {
   const packetData = Buffer.from([10, 12, 14, 16, 18, 20]);
@@ -40,7 +43,7 @@ Deno.test("Creating and parsing Socks UDP frames", async (t) => {
   };
 
   const ipv6HostInfo = {
-    host: "2001:db8:85a3:1234:8a2e:370:7334:1840",
+    host: "2001:0db8:85a3:1234:8a2e:0370:7334:1840",
     port: 80,
   };
 
@@ -534,8 +537,8 @@ Deno.test("SocksClient", async (t) => {
             },
             command: "fake" as any,
           },
-          (err: Error) => {
-            assert_(err instanceof SocksClientError);
+          (err: Error | null) => {
+            assert(err instanceof SocksClientError);
           },
         );
       },
@@ -560,7 +563,7 @@ Deno.test("SocksClient", async (t) => {
             });
           },
           (err: Error) => {
-            assert_(err instanceof SocksClientError);
+            assert(err instanceof SocksClientError);
             return true;
           },
         );
@@ -592,8 +595,8 @@ Deno.test("SocksClient", async (t) => {
             ],
             command: "fake" as any,
           },
-          (err: Error) => {
-            assert_(err instanceof SocksClientError);
+          (err: Error | null) => {
+            assert(err instanceof SocksClientError);
           },
         );
       },
@@ -625,7 +628,7 @@ Deno.test("SocksClient", async (t) => {
             });
           },
           (err: Error) => {
-            assert_(err instanceof SocksClientError);
+            assert(err instanceof SocksClientError);
             return true;
           },
         );
@@ -643,5 +646,21 @@ Deno.test("utils", async (t) => {
 
     assert.notDeepStrictEqual(arr, arrCopy);
     assert.deepStrictEqual(arr, arrCopy.sort());
+  });
+
+  await t.step("should convert between int32 and ipv4 string", () => {
+    const ipAddr = "1.2.3.4";
+    const ipLong = ipv4ToInt32(ipAddr);
+    assert.equal(int32ToIpv4(ipLong), ipAddr);
+  });
+  await t.step("converts a valid IPv4 address to a Buffer correctly", () => {
+    const ip = "192.168.1.1";
+    const expectedBuffer = Buffer.from(new Address4(ip).toArray());
+    assert.deepEqual(expectedBuffer, ipToBuffer(ip));
+  });
+  await t.step("converts a valid IPv6 address to a Buffer correctly", () => {
+    const ip = "2001:0db8:85a3:0000:0000:8a2e:0370:7334";
+    const expectedBuffer = Buffer.from(new Address6(ip).toByteArray());
+    assert.deepEqual(expectedBuffer, ipToBuffer(ip));
   });
 });

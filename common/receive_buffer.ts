@@ -1,4 +1,4 @@
-import { Buffer } from "https://deno.land/std@0.147.0/node/buffer.ts";
+import { Buffer } from "node:buffer";
 
 export class ReceiveBuffer {
   private buffer: Buffer;
